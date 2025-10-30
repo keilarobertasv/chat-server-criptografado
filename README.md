@@ -34,7 +34,7 @@ Agora, o projeto passa a ter criptografia de ponta a ponta.
 
 ### Clonar o repositório
 git clone https://github.com/keilarobertasv/chat-server-criptografado
-cd chat-server
+cd chat-server-criptografado 
 
 ### Instalar dependências
 pip install -r requirements.txt
