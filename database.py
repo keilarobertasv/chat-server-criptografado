@@ -13,7 +13,8 @@ def init_db():
 		CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT UNIQUE NOT NULL,
-			password_hash TEXT NOT NULL
+			password_hash TEXT NOT NULL,
+			public_key TEXT
 		)
 	''')
 
@@ -118,3 +119,15 @@ def get_and_delete_offline_messages(recipient_username):
 	except sqlite3.Error as e:
 		print(f"Erro ao buscar e apagar mensagens offline: {e}")
 		return []
+
+def store_public_key(username, public_key):
+	try:
+		conn = sqlite3.connect(DB_NAME)
+		cursor = conn.cursor()
+		cursor.execute("UPDATE users SET public_key = ? WHERE username = ?", (public_key, username))
+		conn.commit()
+		conn.close()
+		return True, "Chave pública armazenada com sucesso."
+	except sqlite3.Error as e:
+		conn.close()
+		return False, f"Erro no banco de dados ao salvar chave: {e}"
