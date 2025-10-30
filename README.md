@@ -33,7 +33,7 @@ Agora, o projeto passa a ter criptografia de ponta a ponta.
 - SQLite
 
 ### Clonar o repositório
-git clone https://github.com/keilarobertasv/chat-server.git  
+git clone https://github.com/keilarobertasv/chat-server-criptografado
 cd chat-server
 
 ### Instalar dependências
