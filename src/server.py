@@ -3,6 +3,19 @@ import threading
 import json
 import database as db
 from datetime import datetime
+import os
+import base64
+import hashlib
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.serialization import (
+	load_pem_parameters,
+	load_pem_public_key,
+	Encoding,
+	PublicFormat
+)
 
 HOST = "0.0.0.0"
 PORT = 65432
@@ -10,8 +23,24 @@ PORT = 65432
 online_clients = {}
 clients_lock = threading.Lock()
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+PARAMS_PATH = os.path.join(PROJECT_ROOT, "dh_params.pem")
+
+try:
+	with open(PARAMS_PATH, "rb") as f:
+		dh_parameters = load_pem_parameters(f.read())
+except Exception as e:
+	print(f"Erro fatal: Não foi possível carregar 'dh_params.pem'.")
+	print(f"Verifique se o arquivo está em: {PARAMS_PATH}")
+	print("Execute 'generate_dh_params.py' primeiro.")
+	exit(1)
+
 def handle_client(client_socket, address):
 	current_user = None
+	
+	session_aes_key = None
+	session_hmac_key = None
 
 	try:
 		while True:
@@ -28,6 +57,65 @@ def handle_client(client_socket, address):
 					
 					action = message.get("action")
 
+					if not session_aes_key:
+						if action == "handshake":
+							payload = message.get("payload", {})
+							client_public_key_pem = payload.get("dhe_public_key")
+							client_salt_b64 = payload.get("salt")
+
+							if not client_public_key_pem or not client_salt_b64:
+								response = {"status": "error", "message": "Handshake inválido."}
+								client_socket.send(json.dumps(response).encode("utf-8"))
+								continue
+
+							try:
+								client_public_key = load_pem_public_key(
+									client_public_key_pem.encode('utf-8')
+								)
+
+								server_private_key = dh_parameters.generate_private_key()
+								server_public_key = server_private_key.public_key()
+
+								shared_secret = server_private_key.exchange(client_public_key)
+								
+								debug_hash = hashlib.sha256(shared_secret).hexdigest()
+								print(f"Hash do Segredo: {debug_hash}")
+
+								salt_bytes = base64.b64decode(client_salt_b64)
+								
+								hkdf = HKDF(
+									algorithm=hashes.SHA256(),
+									length=64, 
+									salt=salt_bytes,
+									info=b'session-key-derivation',
+								)
+								derived_keys = hkdf.derive(shared_secret)
+								
+								session_aes_key = derived_keys[:32] 
+								session_hmac_key = derived_keys[32:] 
+
+								server_public_key_pem = server_public_key.public_bytes(
+									Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
+								)
+								
+								response = {
+									"status": "success",
+									"payload": {
+										"server_dhe_public_key": server_public_key_pem.decode('utf-8')
+									}
+								}
+								client_socket.send(json.dumps(response).encode("utf-8"))
+								
+							except Exception as e:
+								response = {"status": "error", "message": f"Falha no handshake: {e}"}
+								client_socket.send(json.dumps(response).encode("utf-8"))
+								
+						else:
+							response = {"status": "error", "message": "Handshake necessário."}
+							client_socket.send(json.dumps(response).encode("utf-8"))
+						
+						continue 
+					
 					if action == "register":
 						payload = message.get("payload", {})
 						username = payload.get("username")
@@ -170,6 +258,7 @@ def handle_client(client_socket, address):
 				pass
 	
 	except ConnectionResetError:
+	
 		pass
 	finally:
 		if current_user:
