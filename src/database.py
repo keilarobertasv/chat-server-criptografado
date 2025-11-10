@@ -1,8 +1,12 @@
 import sqlite3
+import os
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-DB_NAME = "chat_server.db"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DB_NAME = os.path.join(PROJECT_ROOT, "chat_server.db")
+
 ph = PasswordHasher()
 
 def init_db():
