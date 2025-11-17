@@ -135,3 +135,20 @@ def store_public_key(username, public_key):
 	except sqlite3.Error as e:
 		conn.close()
 		return False, f"Erro no banco de dados ao salvar chave: {e}"
+
+def get_user_public_key(username):
+	try:
+		conn = sqlite3.connect(DB_NAME)
+		cursor = conn.cursor()
+		cursor.execute("SELECT public_key FROM users WHERE username = ?", (username,))
+		result = cursor.fetchone()
+		conn.close()
+		
+		if result and result[0]:
+			return result[0]
+		else:
+			return None
+	except sqlite3.Error as e:
+		print(f"Erro ao buscar chave pública: {e}")
+		conn.close()
+		return None

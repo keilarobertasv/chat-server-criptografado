@@ -9,7 +9,7 @@ import hashlib
 
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.asymmetric import dh, padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives.serialization import (
@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.serialization import (
 	Encoding,
 	PublicFormat
 )
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, InvalidKey
 
 HOST = "0.0.0.0"
 PORT = 65432
@@ -95,6 +95,8 @@ def handle_client(client_socket, address):
 	
 	session_aes_key = None
 	session_hmac_key = None
+	
+	auth_challenge_details = {} 
 	
 	buffer = b""
 
@@ -207,42 +209,89 @@ def handle_client(client_socket, address):
 						encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
 						client_socket.sendall(encrypted_response + b'\n')
 					
-					elif action == "login":
+					elif action == "auth_challenge":
 						payload = message.get("payload", {})
 						username = payload.get("username")
-						password = payload.get("password")
+						
+						if not username:
+							response = {"status": "error", "message": "Nome de usuário não fornecido."}
+							encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
+							client_socket.sendall(encrypted_response + b'\n')
+							continue
 
-						if username and password:
-							if db.check_user_credentials(username, password):
-								with clients_lock:
-									if username in online_clients:
-										response = {"status": "error", "message": "Este usuário já está online."}
-										encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
-										client_socket.sendall(encrypted_response + b'\n')
-										return 
+						public_key_pem = db.get_user_public_key(username)
+						
+						if not public_key_pem:
+							response = {"status": "error", "message": "Usuário não encontrado ou sem chave pública."}
+							encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
+							client_socket.sendall(encrypted_response + b'\n')
+							continue
 
-								current_user = username
-								online_clients[username] = client_socket
-								
-								status_message = {"type": "status_update", "user": current_user, "status": "online"}
-								encrypted_status = _encrypt(json.dumps(status_message), session_aes_key, session_hmac_key)
-								
-								for user, client in online_clients.items():
-									if client != client_socket:
-										try:
-											client.sendall(encrypted_status + b'\n')
-										except:
-											pass
-								
-								login_response = {"status": "success", "message": "Login bem-sucedido."}
-								encrypted_response = _encrypt(json.dumps(login_response), session_aes_key, session_hmac_key)
-								client_socket.sendall(encrypted_response + b'\n')
-							else:
-								response = {"status": "error", "message": "Usuário ou senha inválidos."}
-								encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
-								client_socket.sendall(encrypted_response + b'\n')
-						else:
-							response = {"status": "error", "message": "Usuário ou senha não fornecidos."}
+						nonce = os.urandom(32)
+						auth_challenge_details = {"username": username, "nonce": nonce, "public_key_pem": public_key_pem}
+						
+						response = {
+							"type": "auth_challenge",
+							"payload": {"nonce": base64.b64encode(nonce).decode('utf-8')}
+						}
+						encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
+						client_socket.sendall(encrypted_response + b'\n')
+
+					elif action == "auth_response":
+						if not auth_challenge_details:
+							response = {"status": "error", "message": "Nenhum desafio de autenticação pendente."}
+							encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
+							client_socket.sendall(encrypted_response + b'\n')
+							continue
+						
+						payload = message.get("payload", {})
+						signature_b64 = payload.get("signature")
+						
+						try:
+							signature = base64.b64decode(signature_b64)
+							nonce = auth_challenge_details["nonce"]
+							public_key_pem = auth_challenge_details["public_key_pem"]
+							
+							public_key = load_pem_public_key(public_key_pem.encode('utf-8'))
+							
+							public_key.verify(
+								signature,
+								nonce,
+								padding.PSS(
+									mgf=padding.MGF1(hashes.SHA256()),
+									salt_length=padding.PSS.MAX_LENGTH
+								),
+								hashes.SHA256()
+							)
+							
+							username = auth_challenge_details["username"]
+							with clients_lock:
+								if username in online_clients:
+									response = {"status": "error", "message": "Este usuário já está online."}
+									encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
+									client_socket.sendall(encrypted_response + b'\n')
+									return 
+
+							current_user = username
+							online_clients[username] = client_socket
+							auth_challenge_details = {} 
+							
+							status_message = {"type": "status_update", "user": current_user, "status": "online"}
+							encrypted_status = _encrypt(json.dumps(status_message), session_aes_key, session_hmac_key)
+							
+							for user, client in online_clients.items():
+								if client != client_socket:
+									try:
+										client.sendall(encrypted_status + b'\n')
+									except:
+										pass
+							
+							login_response = {"status": "success", "message": "Login bem-sucedido."}
+							encrypted_response = _encrypt(json.dumps(login_response), session_aes_key, session_hmac_key)
+							client_socket.sendall(encrypted_response + b'\n')
+
+						except (InvalidSignature, InvalidKey, Exception):
+							response = {"status": "error", "message": "Falha na verificação da assinatura. Login negado."}
 							encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
 							client_socket.sendall(encrypted_response + b'\n')
 
