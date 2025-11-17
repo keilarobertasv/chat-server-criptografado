@@ -31,11 +31,19 @@ def init_db():
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	''')
-
+	cursor.execute('''
+		CREATE TABLE IF NOT EXISTS offline_handshakes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			recipient_username TEXT NOT NULL,
+			sender_username TEXT NOT NULL,
+			public_key TEXT NOT NULL,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	''')
 	conn.commit()
 	conn.close()
 
-def register_user(username, password):
+def register_user(username, password, public_key):
 	conn = sqlite3.connect(DB_NAME)
 	cursor = conn.cursor()
 
@@ -47,11 +55,10 @@ def register_user(username, password):
 	password_hash = ph.hash(password)
 
 	try:
-		cursor.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)', (username, password_hash))
+		cursor.execute('INSERT INTO users (username, password_hash, public_key) VALUES (?, ?, ?)', (username, password_hash, public_key))
 		conn.commit()
 		conn.close()
-		return True, "Usuário registrado com sucesso."
-
+		return True, "Usuário registrado e chave armazenada com sucesso."
 	except sqlite3.Error as e:
 		conn.close()
 		return False, f"Erro no banco de dados: {e}"
@@ -59,10 +66,9 @@ def register_user(username, password):
 def check_user_credentials(username, password):
 	conn = sqlite3.connect(DB_NAME)
 	cursor = conn.cursor()
-	
-	cursor.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
-	result = cursor.fetchone() 
 
+	cursor.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
+	result = cursor.fetchone()
 	conn.close()
 
 	if result:
@@ -74,11 +80,10 @@ def check_user_credentials(username, password):
 			return False
 	else:
 		return False
-	
+
 def get_all_users():
 	conn = sqlite3.connect(DB_NAME)
-	cursor = conn.cursor() 	
-
+	cursor = conn.cursor()
 	cursor.execute("SELECT username FROM users")
 	users = [row[0] for row in cursor.fetchall()]
 
@@ -99,7 +104,7 @@ def store_offline_message(recipient_username, sender_username, message_text):
 	except sqlite3.Error as e:
 		print(f"Erro ao salvar mensagem offline: {e}")
 		return False
-	
+
 def get_and_delete_offline_messages(recipient_username):
 	try:
 		conn = sqlite3.connect(DB_NAME)
@@ -116,7 +121,7 @@ def get_and_delete_offline_messages(recipient_username):
 				"DELETE FROM offline_messages WHERE recipient_username = ?",
 				(recipient_username,)
 			)
-		
+
 		conn.commit()
 		conn.close()
 		return messages
@@ -143,7 +148,7 @@ def get_user_public_key(username):
 		cursor.execute("SELECT public_key FROM users WHERE username = ?", (username,))
 		result = cursor.fetchone()
 		conn.close()
-		
+
 		if result and result[0]:
 			return result[0]
 		else:
@@ -152,3 +157,39 @@ def get_user_public_key(username):
 		print(f"Erro ao buscar chave pública: {e}")
 		conn.close()
 		return None
+
+def store_offline_handshake(recipient_username, sender_username, public_key):
+	try:
+		conn = sqlite3.connect(DB_NAME)
+		cursor = conn.cursor()
+		cursor.execute(
+			"INSERT INTO offline_handshakes (recipient_username, sender_username, public_key) VALUES (?, ?, ?)",
+			(recipient_username, sender_username, public_key)
+		)
+		conn.commit()
+		conn.close()
+		return True
+	except sqlite3.Error as e:
+		print(f"Erro ao salvar handshake offline: {e}")
+		return False
+
+def get_and_delete_offline_handshakes(recipient_username):
+	try:
+		conn = sqlite3.connect(DB_NAME)
+		cursor = conn.cursor()
+		cursor.execute(
+			"SELECT sender_username, public_key FROM offline_handshakes WHERE recipient_username = ?",
+			(recipient_username,)
+		)
+		rows = cursor.fetchall()
+		if rows:
+			cursor.execute(
+				"DELETE FROM offline_handshakes WHERE recipient_username = ?",
+				(recipient_username,)
+			)
+		conn.commit()
+		conn.close()
+		return rows
+	except sqlite3.Error as e:
+		print(f"Erro ao buscar/apagar handshakes offline: {e}")
+		return []
