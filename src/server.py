@@ -34,14 +34,12 @@ try:
     with open(PARAMS_PATH, "rb") as f:
         dh_parameters = load_pem_parameters(f.read())
 except Exception as e:
-    print(f"Erro fatal: Não foi possível carregar 'dh_params.pem'.")
-    print(f"Verifique se o arquivo está em: {PARAMS_PATH}")
-    print("Execute 'generate_dh_params.py' primeiro.")
+    print(f"Erro fatal: dh_params.pem nao encontrado.")
     exit(1)
 
 def _encrypt(plaintext_json_str, aes_key, hmac_key):
     if not aes_key or not hmac_key:
-        raise Exception("Sessão de criptografia não estabelecida.")
+        raise Exception("Sessao nao estabelecida.")
 
     padder = PKCS7(algorithms.AES.block_size).padder()
     padded_data = padder.update(plaintext_json_str.encode('utf-8')) + padder.finalize()
@@ -66,7 +64,7 @@ def _encrypt(plaintext_json_str, aes_key, hmac_key):
 
 def _decrypt(encrypted_payload_bytes, aes_key, hmac_key):
     if not aes_key or not hmac_key:
-        raise Exception("Sessão de criptografia não estabelecida.")
+        raise Exception("Sessao nao estabelecida.")
 
     try:
         wrapper = json.loads(encrypted_payload_bytes.decode('utf-8'))
@@ -87,7 +85,7 @@ def _decrypt(encrypted_payload_bytes, aes_key, hmac_key):
 
         return plaintext.decode('utf-8')
 
-    except (InvalidSignature, KeyError, json.JSONDecodeError, Exception):
+    except:
         return None
 
 def _remove_online_by_socket(sock):
@@ -106,16 +104,16 @@ def _remove_online_by_socket(sock):
 
 def handle_client(client_socket, address):
     current_user = None
-
+    
     session_aes_key = None
     session_hmac_key = None
-    
+
     old_session_aes_key = None
     old_session_hmac_key = None
-    
+
     session_start_time = None
     session_message_count = 0
-    
+
     auth_challenge_details = {}
     buffer = b""
 
@@ -134,7 +132,7 @@ def handle_client(client_socket, address):
 
                 message = None
                 action = None
-                
+
                 decrypted_json_str = None
 
                 if session_aes_key:
@@ -152,19 +150,17 @@ def handle_client(client_socket, address):
                 if not decrypted_json_str and not session_aes_key:
                     try:
                         message = json.loads(payload_bytes.decode('utf-8'))
-                    except json.JSONDecodeError:
-                        print(f"Erro: JSON inválido recebido durante o handshake de {address}")
+                    except:
                         continue
                 
                 if decrypted_json_str:
                     try:
                         message = json.loads(decrypted_json_str)
-                    except json.JSONDecodeError:
-                        print(f"Erro: JSON descriptografado inválido de {address}")
+                    except:
                         continue
                 
                 if not message:
-                    print(f"ALERTA DE SEGURANÇA: HMAC inválido de {address}. Pacote descartado.")
+
                     continue
 
                 action = message.get("action")
@@ -174,10 +170,10 @@ def handle_client(client_socket, address):
                     is_expired_count = session_message_count >= 100
 
                     if is_expired_time or is_expired_count:
-                        print(f"Sessão para {address} expirou. Solicitando renovação (rekey).")
+
                         session_start_time = datetime.now()
                         session_message_count = 0
-                        
+
                         old_session_aes_key = session_aes_key
                         old_session_hmac_key = session_hmac_key
                         
@@ -189,8 +185,8 @@ def handle_client(client_socket, address):
                             response = {"type": "rekey_required"}
                             encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
                             client_socket.sendall(encrypted_response + b'\n')
-                        except Exception as e:
-                            print(f"Erro ao enviar solicitação de rekey: {e}")
+                        except:
+                            pass
                 
                 if session_aes_key and action != "rekey_start":
                     session_message_count += 1
@@ -214,9 +210,7 @@ def handle_client(client_socket, address):
                             server_public_key = server_private_key.public_key()
 
                             shared_secret = server_private_key.exchange(client_public_key)
-
-                            debug_hash = hashlib.sha256(shared_secret).hexdigest()
-                            print(f"Hash do Segredo (Handshake): {debug_hash}")
+                            
 
                             salt_bytes = base64.b64decode(client_salt_b64)
                             hkdf = HKDF(algorithm=hashes.SHA256(), length=64, salt=salt_bytes, info=b'session-key-derivation')
@@ -243,17 +237,12 @@ def handle_client(client_socket, address):
                         if not client_public_key_pem or not client_salt_b64:
                             continue
                             
-                        print(f"Recebido rekey_start de {address}")
-                        
                         client_public_key = load_pem_public_key(client_public_key_pem.encode('utf-8'))
                         server_private_key = dh_parameters.generate_private_key()
                         server_public_key = server_private_key.public_key()
                         
                         shared_secret = server_private_key.exchange(client_public_key)
-                        
-                        debug_hash = hashlib.sha256(shared_secret).hexdigest()
-                        print(f"Hash do Segredo (Rekey): {debug_hash}")
-                        
+
                         salt_bytes = base64.b64decode(client_salt_b64)
                         hkdf = HKDF(algorithm=hashes.SHA256(), length=64, salt=salt_bytes, info=b'session-key-derivation')
                         derived_keys = hkdf.derive(shared_secret)
@@ -276,8 +265,7 @@ def handle_client(client_socket, address):
                         if current_user:
                             with clients_lock:
                                 online_clients[current_user] = (client_socket, session_aes_key, session_hmac_key, old_session_aes_key, old_session_hmac_key)
-                        
-                        print(f"Rekey para {address} concluído com sucesso.")
+
 
                     elif action == "register":
                         payload = message.get("payload", {})
@@ -291,7 +279,47 @@ def handle_client(client_socket, address):
                             else:
                                 response = {"status": "error", "message": info_message}
                         else:
-                            response = {"status": "error", "message": "Usuário, senha ou chave pública não fornecidos."}
+                            response = {"status": "error", "message": "Dados incompletos."}
+                        encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
+                        client_socket.sendall(encrypted_response + b'\n')
+                    
+                    elif action == "login_new_device":
+                        payload = message.get("payload", {})
+                        username = payload.get("username")
+                        password = payload.get("password")
+                        new_public_key = payload.get("public_key")
+                        
+                        if not username or not password or not new_public_key:
+                            continue
+
+                        if db.verify_password(username, password):
+                            if db.update_public_key_and_clear_messages(username, new_public_key):
+                                with clients_lock:
+                                    if username in online_clients:
+                                        old_sock, _, _, _, _ = online_clients[username]
+                                        try:
+                                            old_sock.shutdown(socket.SHUT_RDWR)
+                                        except: pass
+                                        try:
+                                            old_sock.close()
+                                        except: pass
+                                        del online_clients[username]
+
+                                notify_msg = {"type": "contact_key_changed", "username": username}
+                                with clients_lock:
+                                    recipients = list(online_clients.items())
+                                for user, (client_sock, aes_key, hmac_key, _, _) in recipients:
+                                    if user != username:
+                                        try:
+                                            client_sock.sendall(_encrypt(json.dumps(notify_msg), aes_key, hmac_key) + b'\n')
+                                        except: pass
+
+                                response = {"status": "success", "message": "Dispositivo registrado. Faça login."}
+                            else:
+                                response = {"status": "error", "message": "Erro no banco de dados."}
+                        else:
+                            response = {"status": "error", "message": "Senha incorreta."}
+                            
                         encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
                         client_socket.sendall(encrypted_response + b'\n')
 
@@ -308,23 +336,11 @@ def handle_client(client_socket, address):
                         public_key_pem = db.get_user_public_key(username)
 
                         if not public_key_pem:
-                            response = {"status": "error", "message": "Usuário não encontrado ou sem chave pública."}
+                            response = {"status": "error", "message": "Usuário não encontrado."}
                             encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
                             client_socket.sendall(encrypted_response + b'\n')
                             continue
-                        with clients_lock:
-                            if username in online_clients:
-                                old_sock, _, _, _, _ = online_clients[username]
-                                try:
-                                    old_sock.shutdown(socket.SHUT_RDWR)
-                                except:
-                                    pass
-                                try:
-                                    old_sock.close()
-                                except:
-                                    pass
-                                if username in online_clients:
-                                    del online_clients[username]
+                        
                         nonce = os.urandom(32)
                         auth_challenge_details = {"username": username, "nonce": nonce, "public_key_pem": public_key_pem}
                         response = {"type": "auth_challenge", "payload": {"nonce": base64.b64encode(nonce).decode('utf-8')}}
@@ -333,7 +349,7 @@ def handle_client(client_socket, address):
 
                     elif action == "auth_response":
                         if not auth_challenge_details:
-                            response = {"status": "error", "message": "Nenhum desafio de autenticação pendente."}
+                            response = {"status": "error", "message": "Nenhum desafio pendente."}
                             encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
                             client_socket.sendall(encrypted_response + b'\n')
                             continue
@@ -358,14 +374,20 @@ def handle_client(client_socket, address):
                             username = auth_challenge_details["username"]
                             with clients_lock:
                                 if username in online_clients:
-                                    response = {"status": "error", "message": "Este usuário já está online."}
-                                    encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
-                                    client_socket.sendall(encrypted_response + b'\n')
-                                    return
+                                    old_sock, _, _, _, _ = online_clients[username]
+                                    try:
+                                        old_sock.shutdown(socket.SHUT_RDWR)
+                                    except: pass
+                                    try:
+                                        old_sock.close()
+                                    except: pass
+                                    del online_clients[username]
+
                             current_user = username
                             with clients_lock:
                                 online_clients[current_user] = (client_socket, session_aes_key, session_hmac_key, None, None)
                             auth_challenge_details = {}
+                            
                             pending_handshakes = db.get_and_delete_offline_handshakes(current_user)
                             if pending_handshakes:
                                 for sender, public_key in pending_handshakes:
@@ -373,8 +395,8 @@ def handle_client(client_socket, address):
                                     try:
                                         encrypted_offer = _encrypt(json.dumps(offer), session_aes_key, session_hmac_key)
                                         client_socket.sendall(encrypted_offer + b'\n')
-                                    except:
-                                        pass
+                                    except: pass
+                            
                             status_message = {"type": "status_update", "user": current_user, "status": "online"}
                             with clients_lock:
                                 recipients = list(online_clients.items())
@@ -383,15 +405,14 @@ def handle_client(client_socket, address):
                                     try:
                                         encrypted_status = _encrypt(json.dumps(status_message), aes_key, hmac_key)
                                         client_sock.sendall(encrypted_status + b'\n')
-                                    except:
-                                        pass
+                                    except: pass
 
                             login_response = {"status": "success", "message": "Login bem-sucedido."}
                             encrypted_response = _encrypt(json.dumps(login_response), session_aes_key, session_hmac_key)
                             client_socket.sendall(encrypted_response + b'\n')
 
                         except (InvalidSignature, InvalidKey, Exception):
-                            response = {"status": "error", "message": "Falha na verificação da assinatura. Login negado."}
+                            response = {"status": "error", "message": "Falha na autenticação."}
                             encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
                             client_socket.sendall(encrypted_response + b'\n')
 
@@ -400,22 +421,23 @@ def handle_client(client_socket, address):
                             payload = message.get("payload", {})
                             target_username = payload.get("username")
                             if not target_username:
-                                response = {"status": "error", "message": "Nome de usuário do destinatário não fornecido."}
-                                encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
-                                client_socket.sendall(encrypted_response + b'\n')
+
                                 continue
                             public_key_b = db.get_user_public_key(target_username)
                             if not public_key_b:
-                                response = {"status": "error", "message": f"Usuário '{target_username}' não encontrado ou sem chave pública."}
+                                response = {"status": "error", "message": f"Usuário '{target_username}' não encontrado."}
                                 encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
                                 client_socket.sendall(encrypted_response + b'\n')
                                 continue
+                            
                             response_to_a = {"type": "public_key_response", "payload": {"username": target_username, "public_key": public_key_b}}
                             encrypted_response_to_a = _encrypt(json.dumps(response_to_a), session_aes_key, session_hmac_key)
                             client_socket.sendall(encrypted_response_to_a + b'\n')
+                            
                             public_key_a = db.get_user_public_key(current_user)
                             with clients_lock:
                                 recipient_session = online_clients.get(target_username)
+                            
                             if recipient_session and public_key_a:
                                 recipient_socket, recipient_aes_key, recipient_hmac_key, _, _ = recipient_session
                                 response_to_b = {"type": "p2p_handshake_offer", "payload": {"username": current_user, "public_key": public_key_a}}
@@ -453,9 +475,7 @@ def handle_client(client_socket, address):
                         text = payload.get("text")
 
                         if not current_user:
-                            response = {"status": "error", "message": "Faça login antes de enviar mensagens."}
-                            encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
-                            client_socket.sendall(encrypted_response + b'\n')
+
                             continue
 
                         if recipient and text:
@@ -489,34 +509,29 @@ def handle_client(client_socket, address):
                                     recipient_socket.sendall(encrypted_event + b'\n')
                                 except:
                                     pass
-                except Exception as e:
-                    print(f"Erro ao processar ação {action} para {address}: {e}")
-                    try:
-                        response = {"status": "error", "message": "Erro interno do servidor."}
-                        encrypted_response = _encrypt(json.dumps(response), session_aes_key, session_hmac_key)
-                        client_socket.sendall(encrypted_response + b'\n')
-                    except:
-                        pass
+                except:
+                    pass
 
-    except ConnectionResetError:
+    except:
         pass
     finally:
-        _remove_online_by_socket(client_socket)
+
         if current_user:
             with clients_lock:
                 if current_user in online_clients:
-                    del online_clients[current_user]
-
-                if session_aes_key:
-                    status_message = {"type": "status_update", "user": current_user, "status": "offline"}
-                    with clients_lock:
-                        recipients = list(online_clients.items())
-                    for user, (client_sock, aes_key, hmac_key, _, _) in recipients:
-                        try:
-                            encrypted_status = _encrypt(json.dumps(status_message), aes_key, hmac_key)
-                            client_sock.sendall(encrypted_status + b'\n')
-                        except:
-                            pass
+                    stored_socket = online_clients[current_user][0]
+                    if stored_socket == client_socket:
+                        del online_clients[current_user]
+                        
+                        if session_aes_key:
+                            status_message = {"type": "status_update", "user": current_user, "status": "offline"}
+                            recipients = list(online_clients.items())
+                            for user, (client_sock, aes_key, hmac_key, _, _) in recipients:
+                                try:
+                                    encrypted_status = _encrypt(json.dumps(status_message), aes_key, hmac_key)
+                                    client_sock.sendall(encrypted_status + b'\n')
+                                except:
+                                    pass
         try:
             client_socket.shutdown(socket.SHUT_RDWR)
         except:
